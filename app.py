@@ -183,11 +183,11 @@ class GestureController:
                     cv2.putText(frame, f"Gesture: {last_gesture}", (10, 90),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
-                cv2.imshow("Snake Game - Gesture Control", frame)
+                # cv2.imshow("Snake Game - Gesture Control", frame)
                 
-                # Check for ESC key to close camera window
-                if cv2.waitKey(1) & 0xFF == 27:
-                    break
+                # # Check for ESC key to close camera window
+                # if cv2.waitKey(1) & 0xFF == 27:
+                #     break
                     
             except Exception as e:
                 print(f"Error in camera loop: {e}")
