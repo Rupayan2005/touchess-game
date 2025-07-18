@@ -7,6 +7,7 @@ import mediapipe as mp
 import numpy as np
 import threading
 from queue import Queue
+from enum import Enum
 
 # Initialize Pygame
 pygame.init()
@@ -17,6 +18,12 @@ HEIGHT = 700
 GRID_SIZE = 30
 GRID_WIDTH = WIDTH // GRID_SIZE
 GRID_HEIGHT = HEIGHT // GRID_SIZE
+
+# Game States
+class GameState(Enum):
+    START_SCREEN = 1
+    PLAYING = 2
+    GAME_OVER = 3
 
 # Modern color palette
 BACKGROUND = (15, 15, 25)
@@ -29,16 +36,19 @@ TEXT_COLOR = (220, 220, 220)
 ACCENT_COLOR = (138, 43, 226)
 GRID_COLOR = (25, 25, 35)
 SHADOW_COLOR = (5, 5, 15)
+BUTTON_COLOR = (50, 50, 70)
+BUTTON_HOVER = (70, 70, 90)
 
 # Create the window
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Modern Snake Game")
 
 # Font setup
-title_font = pygame.font.Font(None, 64)
+title_font = pygame.font.Font(None, 72)
 game_font = pygame.font.Font(None, 48)
 score_font = pygame.font.Font(None, 32)
 small_font = pygame.font.Font(None, 24)
+medium_font = pygame.font.Font(None, 36)
 
 class GestureController:
     def __init__(self):
@@ -52,33 +62,53 @@ class GestureController:
         
         # Gesture detection variables
         self.prev_x, self.prev_y = 0, 0
-        self.swipe_threshold = 80  # Adjusted for better sensitivity
-        self.cooldown = 0.3        # Faster response for gaming
+        self.swipe_threshold = 60  # More sensitive
+        self.cooldown = 0.2        # Faster response
         self.last_swipe_time = time.time()
         self.gesture_queue = Queue()
         
         # Camera setup
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        
+        self.cap = None
         self.running = False
         self.camera_thread = None
+        self.camera_initialized = False
+        
+    def init_camera(self):
+        """Initialize camera safely"""
+        if not self.camera_initialized:
+            try:
+                self.cap = cv2.VideoCapture(0)
+                if self.cap.isOpened():
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    self.camera_initialized = True
+                    return True
+                else:
+                    return False
+            except Exception as e:
+                print(f"Camera initialization failed: {e}")
+                return False
+        return True
         
     def start(self):
         """Start the gesture detection in a separate thread"""
+        if not self.init_camera():
+            return False
+            
         self.running = True
         self.camera_thread = threading.Thread(target=self._camera_loop)
         self.camera_thread.daemon = True
         self.camera_thread.start()
+        return True
         
     def stop(self):
         """Stop the gesture detection"""
         self.running = False
         if self.camera_thread:
-            self.camera_thread.join()
-        self.cap.release()
+            self.camera_thread.join(timeout=1.0)
+        if self.cap:
+            self.cap.release()
         cv2.destroyAllWindows()
         
     def get_gesture(self):
@@ -89,73 +119,78 @@ class GestureController:
         
     def _camera_loop(self):
         """Main camera processing loop"""
-        while self.running and self.cap.isOpened():
-            success, frame = self.cap.read()
-            if not success:
-                continue
+        while self.running and self.cap and self.cap.isOpened():
+            try:
+                success, frame = self.cap.read()
+                if not success:
+                    continue
+                    
+                frame = cv2.flip(frame, 1)  # Mirror image
+                h, w, _ = frame.shape
                 
-            frame = cv2.flip(frame, 1)  # Mirror image
-            h, w, _ = frame.shape
-            
-            # Convert to RGB for MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = self.hands.process(rgb_frame)
-            
-            if result.multi_hand_landmarks:
-                for hand_landmarks in result.multi_hand_landmarks:
-                    # Index fingertip position (landmark 8)
-                    x = int(hand_landmarks.landmark[8].x * w)
-                    y = int(hand_landmarks.landmark[8].y * h)
+                # Convert to RGB for MediaPipe
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = self.hands.process(rgb_frame)
+                
+                if result.multi_hand_landmarks:
+                    for hand_landmarks in result.multi_hand_landmarks:
+                        # Index fingertip position (landmark 8)
+                        x = int(hand_landmarks.landmark[8].x * w)
+                        y = int(hand_landmarks.landmark[8].y * h)
+                        
+                        # Calculate movement
+                        dx = x - self.prev_x
+                        dy = y - self.prev_y
+                        
+                        # Detect swipe gestures
+                        current_time = time.time()
+                        if current_time - self.last_swipe_time > self.cooldown:
+                            if abs(dx) > abs(dy) and abs(dx) > self.swipe_threshold:
+                                if dx > 0:
+                                    self.gesture_queue.put('RIGHT')
+                                else:
+                                    self.gesture_queue.put('LEFT')
+                                self.last_swipe_time = current_time
+                                
+                            elif abs(dy) > self.swipe_threshold:
+                                if dy < 0:
+                                    self.gesture_queue.put('UP')
+                                else:
+                                    self.gesture_queue.put('DOWN')
+                                self.last_swipe_time = current_time
+                        
+                        self.prev_x, self.prev_y = x, y
+                        
+                        # Draw hand landmarks
+                        self.mp_draw.draw_landmarks(
+                            frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS
+                        )
+                        
+                        # Draw fingertip position
+                        cv2.circle(frame, (x, y), 8, (0, 255, 0), -1)
+                
+                # Add UI elements
+                cv2.putText(frame, "Snake Game Gesture Control", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame, "Swipe with index finger", (10, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, "Press ESC to close camera", (10, h-20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Show gesture feedback
+                if not self.gesture_queue.empty():
+                    last_gesture = list(self.gesture_queue.queue)[-1]
+                    cv2.putText(frame, f"Gesture: {last_gesture}", (10, 90),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                cv2.imshow("Snake Game - Gesture Control", frame)
+                
+                # Check for ESC key to close camera window
+                if cv2.waitKey(1) & 0xFF == 27:
+                    break
                     
-                    # Calculate movement
-                    dx = x - self.prev_x
-                    dy = y - self.prev_y
-                    
-                    # Detect swipe gestures
-                    current_time = time.time()
-                    if current_time - self.last_swipe_time > self.cooldown:
-                        if abs(dx) > abs(dy) and abs(dx) > self.swipe_threshold:
-                            if dx > 0:
-                                self.gesture_queue.put('RIGHT')
-                            else:
-                                self.gesture_queue.put('LEFT')
-                            self.last_swipe_time = current_time
-                            
-                        elif abs(dy) > self.swipe_threshold:
-                            if dy < 0:
-                                self.gesture_queue.put('UP')
-                            else:
-                                self.gesture_queue.put('DOWN')
-                            self.last_swipe_time = current_time
-                    
-                    self.prev_x, self.prev_y = x, y
-                    
-                    # Draw hand landmarks
-                    self.mp_draw.draw_landmarks(
-                        frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS
-                    )
-                    
-                    # Draw fingertip position
-                    cv2.circle(frame, (x, y), 8, (0, 255, 0), -1)
-            
-            # Add UI elements
-            cv2.putText(frame, "Snake Game Gesture Control", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            cv2.putText(frame, "Swipe with index finger", (10, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, "Press ESC to close camera", (10, h-20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            # Show gesture feedback
-            if not self.gesture_queue.empty():
-                last_gesture = list(self.gesture_queue.queue)[-1]
-                cv2.putText(frame, f"Gesture: {last_gesture}", (10, 90),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-            cv2.imshow("Snake Game - Gesture Control", frame)
-            
-            # Check for ESC key to close camera window
-            if cv2.waitKey(1) & 0xFF == 27:
+            except Exception as e:
+                print(f"Error in camera loop: {e}")
                 break
                 
         cv2.destroyAllWindows()
@@ -177,11 +212,12 @@ class Particle:
         self.velocity = (self.velocity[0] * 0.98, self.velocity[1] * 0.98)
 
     def draw(self, screen):
+        if self.life <= 0:
+            return
         alpha = int(255 * (self.life / self.max_life))
         color = (*self.color, alpha)
-        size = int(self.size * (self.life / self.max_life))
-        if size > 0:
-            pygame.draw.circle(screen, color[:3], (int(self.x), int(self.y)), size)
+        size = max(1, int(self.size * (self.life / self.max_life)))
+        pygame.draw.circle(screen, color[:3], (int(self.x), int(self.y)), size)
 
 class Snake:
     def __init__(self):
@@ -190,12 +226,12 @@ class Snake:
         self.body = [(center_x, center_y)]
         self.direction = [1, 0]
         self.grow = False
-        self.animation_offset = 0
         self.last_move_time = 0
-        self.move_delay = 150  # milliseconds
+        self.move_delay = 120  # milliseconds
 
     def can_move(self):
-        return time.time() * 1000 - self.last_move_time > self.move_delay
+        current_time = time.time() * 1000
+        return current_time - self.last_move_time >= self.move_delay
 
     def move(self):
         if not self.can_move():
@@ -204,10 +240,8 @@ class Snake:
         head = self.body[0]
         new_head = (head[0] + self.direction[0], head[1] + self.direction[1])
 
-        # Check for wall collision
-        if (new_head[0] < 0 or new_head[0] >= GRID_WIDTH or
-            new_head[1] < 0 or new_head[1] >= GRID_HEIGHT):
-            return False
+        # Wrap around boundaries instead of collision
+        new_head = (new_head[0] % GRID_WIDTH, new_head[1] % GRID_HEIGHT)
 
         # Check for self collision
         if new_head in self.body[1:]:
@@ -227,16 +261,33 @@ class Snake:
         if (new_direction[0] * -1, new_direction[1] * -1) != tuple(self.direction):
             self.direction = new_direction
 
+class Button:
+    def __init__(self, x, y, width, height, text, font, color=BUTTON_COLOR, hover_color=BUTTON_HOVER):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.font = font
+        self.color = color
+        self.hover_color = hover_color
+        self.is_hovered = False
+        
+    def update(self, mouse_pos):
+        self.is_hovered = self.rect.collidepoint(mouse_pos)
+        
+    def draw(self, screen):
+        color = self.hover_color if self.is_hovered else self.color
+        draw_rounded_rect(screen, color, self.rect, 10)
+        
+        # Draw text
+        text_surface = self.font.render(self.text, True, TEXT_COLOR)
+        text_rect = text_surface.get_rect(center=self.rect.center)
+        screen.blit(text_surface, text_rect)
+        
+    def is_clicked(self, mouse_pos, mouse_click):
+        return self.rect.collidepoint(mouse_pos) and mouse_click
+
 def draw_rounded_rect(surface, color, rect, radius):
     """Draw a rounded rectangle"""
     pygame.draw.rect(surface, color, rect, border_radius=radius)
-
-def draw_glow_effect(surface, color, center, radius):
-    """Draw a glowing effect"""
-    for i in range(radius, 0, -2):
-        alpha = int(50 * (1 - i / radius))
-        glow_color = (*color, alpha)
-        pygame.draw.circle(surface, color, center, i)
 
 def draw_grid(screen):
     """Draw a subtle grid"""
@@ -263,7 +314,7 @@ def draw_snake(screen, snake, particles):
             color = (min(255, color[0] + pulse), min(255, color[1] + pulse), min(255, color[2] + pulse))
         else:
             # Gradient from body to tail
-            factor = i / len(snake.body)
+            factor = i / max(1, len(snake.body) - 1)
             color = (
                 int(SNAKE_BODY[0] * (1 - factor) + SNAKE_TAIL[0] * factor),
                 int(SNAKE_BODY[1] * (1 - factor) + SNAKE_TAIL[1] * factor),
@@ -280,7 +331,7 @@ def draw_snake(screen, snake, particles):
         draw_rounded_rect(screen, highlight_color, highlight_rect, 6)
         
         # Add particles for the head
-        if i == 0 and random.random() < 0.3:
+        if i == 0 and random.random() < 0.2:
             particles.append(Particle(
                 x + GRID_SIZE // 2 + random.randint(-5, 5),
                 y + GRID_SIZE // 2 + random.randint(-5, 5),
@@ -318,7 +369,7 @@ def draw_food(screen, food_pos, particles):
     draw_rounded_rect(screen, highlight_color, highlight_rect, 8)
     
     # Add sparkle particles
-    if random.random() < 0.4:
+    if random.random() < 0.3:
         particles.append(Particle(
             x + GRID_SIZE // 2 + random.randint(-10, 10),
             y + GRID_SIZE // 2 + random.randint(-10, 10),
@@ -347,7 +398,66 @@ def draw_ui(screen, score, high_score, gesture_enabled=False):
         controls_text = small_font.render('Arrow Keys | Press G for gestures', True, (100, 100, 100))
         screen.blit(controls_text, (WIDTH - 250, HEIGHT - 30))
 
-def draw_game_over(screen, score, high_score, particles, gesture_enabled=False):
+def draw_start_screen(screen, particles):
+    """Draw the start screen"""
+    screen.fill(BACKGROUND)
+    
+    # Update and draw particles
+    for particle in particles:
+        particle.update()
+        particle.draw(screen)
+    
+    # Add some floating particles
+    if random.random() < 0.1:
+        particles.append(Particle(
+            random.randint(0, WIDTH),
+            random.randint(0, HEIGHT),
+            random.choice([SNAKE_HEAD, FOOD_COLOR, ACCENT_COLOR]),
+            (random.uniform(-1, 1), random.uniform(-1, 1)),
+            100
+        ))
+    
+    # Title with glow effect
+    title_text = title_font.render('SNAKE GAME', True, TEXT_COLOR)
+    title_rect = title_text.get_rect(center=(WIDTH/2, HEIGHT/2 - 150))
+    
+    # Add glow effect to title
+    for offset in [(3, 3), (-3, -3), (3, -3), (-3, 3)]:
+        glow_text = title_font.render('SNAKE GAME', True, ACCENT_COLOR)
+        glow_rect = glow_text.get_rect(center=(WIDTH/2 + offset[0], HEIGHT/2 - 150 + offset[1]))
+        screen.blit(glow_text, glow_rect)
+    
+    screen.blit(title_text, title_rect)
+    
+    # Subtitle
+    subtitle_text = medium_font.render('Modern Snake with Gesture Control', True, (150, 150, 150))
+    subtitle_rect = subtitle_text.get_rect(center=(WIDTH/2, HEIGHT/2 - 100))
+    screen.blit(subtitle_text, subtitle_rect)
+    
+    # Features
+    features = [
+        "✓ Wrap-around boundaries",
+        "✓ Hand gesture controls",
+        "✓ Smooth animations",
+        "✓ Particle effects"
+    ]
+    
+    for i, feature in enumerate(features):
+        feature_text = small_font.render(feature, True, SNAKE_HEAD)
+        feature_rect = feature_text.get_rect(center=(WIDTH/2, HEIGHT/2 - 30 + i * 25))
+        screen.blit(feature_text, feature_rect)
+    
+    # Start button
+    start_button = Button(WIDTH/2 - 100, HEIGHT/2 + 80, 200, 50, "START GAME", medium_font)
+    
+    # Controls info
+    controls_text = small_font.render('Use Arrow Keys or Press G for Gesture Control', True, (100, 100, 100))
+    controls_rect = controls_text.get_rect(center=(WIDTH/2, HEIGHT - 50))
+    screen.blit(controls_text, controls_rect)
+    
+    return start_button
+
+def draw_game_over(screen, score, high_score, particles):
     """Draw game over screen with effects"""
     # Semi-transparent overlay
     overlay = pygame.Surface((WIDTH, HEIGHT))
@@ -375,31 +485,21 @@ def draw_game_over(screen, score, high_score, particles, gesture_enabled=False):
     # High score
     if score >= high_score:
         new_best_text = score_font.render('NEW BEST!', True, FOOD_COLOR)
-def main():
-    clock = pygame.time.Clock()
-    snake = Snake()
-    food_pos = None
-    score = 0
-    high_score = 0
-    game_over = False
-    particles = []
-    
-    # Initialize gesture controller
-    gesture_controller = GestureController()
-    gesture_enabled = False
-    # Gesture control info
-    if gesture_enabled:
-        gesture_text = small_font.render('Hand Gestures Active - Press G to toggle', True, SNAKE_HEAD)
-        gesture_rect = gesture_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 120))
-        screen.blit(gesture_text, gesture_rect)
+        new_best_rect = new_best_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 20))
+        screen.blit(new_best_text, new_best_rect)
     else:
-        gesture_text = small_font.render('Press G to enable Hand Gestures', True, (100, 100, 100))
-        gesture_rect = gesture_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 120))
-        screen.blit(gesture_text, gesture_rect)
+        high_score_text = score_font.render(f'Best: {high_score}', True, ACCENT_COLOR)
+        high_score_rect = high_score_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 20))
+        screen.blit(high_score_text, high_score_rect)
+    
+    # Restart instruction
+    restart_text = small_font.render('Press SPACE to play again or ESC to return to menu', True, (150, 150, 150))
+    restart_rect = restart_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 80))
+    screen.blit(restart_text, restart_rect)
     
     # Add explosion particles
-    if len(particles) < 50:
-        for _ in range(5):
+    if len(particles) < 30:
+        for _ in range(2):
             particles.append(Particle(
                 WIDTH // 2 + random.randint(-100, 100),
                 HEIGHT // 2 + random.randint(-100, 100),
@@ -421,45 +521,70 @@ def create_food_particles(x, y, particles):
 
 def main():
     clock = pygame.time.Clock()
-    snake = Snake()
+    game_state = GameState.START_SCREEN
+    
+    # Game variables
+    snake = None
     food_pos = None
     score = 0
     high_score = 0
-    game_over = False
     particles = []
     
     # Initialize gesture controller
     gesture_controller = GestureController()
     gesture_enabled = False
     
-    # Load high score (in a real game, you'd save this to a file)
-    # high_score = load_high_score()
-    
     try:
         while True:
+            mouse_pos = pygame.mouse.get_pos()
+            mouse_click = False
+            
+            # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
+                    
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_click = True
+                    
                 if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        if game_state == GameState.GAME_OVER:
+                            game_state = GameState.START_SCREEN
+                        elif game_state == GameState.PLAYING:
+                            game_state = GameState.START_SCREEN
+                    
                     if event.key == pygame.K_g:
                         # Toggle gesture control
                         gesture_enabled = not gesture_enabled
                         if gesture_enabled:
-                            gesture_controller.start()
+                            if gesture_controller.start():
+                                print("Gesture control enabled")
+                            else:
+                                print("Failed to start gesture control")
+                                gesture_enabled = False
                         else:
                             gesture_controller.stop()
+                            print("Gesture control disabled")
                     
-                    if game_over:
+                    if game_state == GameState.START_SCREEN:
                         if event.key == pygame.K_SPACE:
-                            # Reset game
+                            game_state = GameState.PLAYING
                             snake = Snake()
                             food_pos = None
                             score = 0
-                            game_over = False
                             particles.clear()
-                            continue
-                    else:
-                        # Keyboard controls (always available)
+                    
+                    elif game_state == GameState.GAME_OVER:
+                        if event.key == pygame.K_SPACE:
+                            game_state = GameState.PLAYING
+                            snake = Snake()
+                            food_pos = None
+                            score = 0
+                            particles.clear()
+                    
+                    elif game_state == GameState.PLAYING and snake:
+                        # Keyboard controls
                         if event.key == pygame.K_UP:
                             snake.set_direction([0, -1])
                         elif event.key == pygame.K_DOWN:
@@ -470,7 +595,7 @@ def main():
                             snake.set_direction([1, 0])
             
             # Handle gesture input
-            if gesture_enabled and not game_over:
+            if gesture_enabled and game_state == GameState.PLAYING and snake:
                 gesture = gesture_controller.get_gesture()
                 if gesture:
                     if gesture == 'UP':
@@ -481,8 +606,24 @@ def main():
                         snake.set_direction([-1, 0])
                     elif gesture == 'RIGHT':
                         snake.set_direction([1, 0])
-
-            if not game_over:
+            
+            # Update particles
+            particles = [p for p in particles if p.life > 0]
+            
+            # Game state logic
+            if game_state == GameState.START_SCREEN:
+                start_button = draw_start_screen(screen, particles)
+                start_button.update(mouse_pos)
+                start_button.draw(screen)
+                
+                if start_button.is_clicked(mouse_pos, mouse_click):
+                    game_state = GameState.PLAYING
+                    snake = Snake()
+                    food_pos = None
+                    score = 0
+                    particles.clear()
+                    
+            elif game_state == GameState.PLAYING:
                 # Generate food
                 if food_pos is None:
                     food_pos = (random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1))
@@ -491,7 +632,7 @@ def main():
 
                 # Move snake
                 if not snake.move():
-                    game_over = True
+                    game_state = GameState.GAME_OVER
                     high_score = max(high_score, score)
                     continue
 
@@ -504,27 +645,34 @@ def main():
                     food_pos = None
                     score += 10
                     # Increase speed slightly
-                    snake.move_delay = max(80, snake.move_delay - 2)
+                    snake.move_delay = max(70, snake.move_delay - 1)
 
-            # Draw everything
-            screen.fill(BACKGROUND)
-            draw_grid(screen)
-            
-            # Update and draw particles
-            particles = [p for p in particles if p.life > 0]
-            for particle in particles:
-                particle.update()
-                particle.draw(screen)
-            
-            if not game_over:
+                # Draw game
+                screen.fill(BACKGROUND)
+                draw_grid(screen)
+                
+                # Update and draw particles
+                for particle in particles:
+                    particle.update()
+                    particle.draw(screen)
+                
                 draw_snake(screen, snake, particles)
                 
                 if food_pos:
                     draw_food(screen, food_pos, particles)
                 
                 draw_ui(screen, score, high_score, gesture_enabled)
-            else:
-                draw_game_over(screen, score, high_score, particles, gesture_enabled)
+                
+            elif game_state == GameState.GAME_OVER:
+                screen.fill(BACKGROUND)
+                draw_grid(screen)
+                
+                # Update and draw particles
+                for particle in particles:
+                    particle.update()
+                    particle.draw(screen)
+                
+                draw_game_over(screen, score, high_score, particles)
 
             pygame.display.flip()
             clock.tick(60)  # Smooth 60 FPS
