@@ -57,9 +57,7 @@ This project combines traditional arcade gaming with cutting-edge computer visio
 | Key | Action |
 |-----|--------|
 | `↑` `↓` `←` `→` | Move snake |
-| `W` `A` `S` `D` | Alternative movement |
 | `G` | Toggle gesture control |
-| `E` | Toggle visual effects |
 | `Space` | Restart game (when game over) |
 | `ESC` | Exit application |
 
@@ -74,11 +72,11 @@ This project combines traditional arcade gaming with cutting-edge computer visio
 
 ### Getting Started
 1. Launch the application using `python app.py`
-2. Use arrow keys or WASD to control the snake initially
+2. Use arrow keys to control the snake initially
 3. Press `G` to activate gesture control mode
 4. Position your hand in front of the webcam
 5. Use clear, deliberate finger swipes to control the snake
-6. Collect food items while avoiding walls and the snake's body
+6. Collect food items while avoiding the snake's body
 
 ## 🔧 Technical Architecture
 
@@ -133,7 +131,6 @@ numpy>=1.20.0
 - Avoid cluttered backgrounds
 
 **Performance Issues**
-- Press `E` to disable visual effects
 - Close other resource-intensive applications
 - Ensure adequate system resources are available
 
@@ -200,15 +197,7 @@ For support, feature requests, or bug reports:
 - Check existing issues for similar problems
 - Provide detailed information about your environment and the issue
 
-## 🔮 Future Roadmap
-
-- [ ] Multi-player support
-- [ ] Advanced gesture patterns
-- [ ] Customizable themes and skins
-- [ ] Mobile platform support
-- [ ] AI-powered difficulty adjustment
-- [ ] Tournament mode with leaderboards
 
 ---
 
-**Made with ❤️ by the Touchless Gaming Community**
+**Made with ❤️ by Geothermal and Shadow**
