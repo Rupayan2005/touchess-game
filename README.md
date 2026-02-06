@@ -1,4 +1,4 @@
-# Touchless Snake Game 🐍
+# SnakeVision - Touchless Snake Game 🐍
 
 A modern implementation of the classic Snake game featuring computer vision-based gesture control. Experience hands-free gaming using advanced hand tracking technology powered by MediaPipe and OpenCV.
 
